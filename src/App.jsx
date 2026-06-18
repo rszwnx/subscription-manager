@@ -8,8 +8,21 @@ function fmt(v) {
   return v.toLocaleString('ko-KR') + '원';
 }
 
+function nextMonth(m) {
+  const [y, mo] = m.split('-').map(Number);
+  const d = new Date(y, mo - 1 + 1, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function monthLabel(m) {
+  const [y, mo] = m.split('-').map(Number);
+  return `${y}년 ${mo}월`;
+}
+
 export default function App() {
-  const [subs, setSubs] = useState([]);
+  const [allSubs, setAllSubs] = useState([]);
+  const [months, setMonths] = useState([]);
+  const [currentMonth, setCurrentMonth] = useState(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
   const [sort, setSort] = useState('desc');
@@ -24,7 +37,7 @@ export default function App() {
   const showToast = useCallback((msg) => {
     setToast(msg);
     clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(''), 2000);
+    toastTimer.current = setTimeout(() => setToast(''), 2200);
   }, []);
 
   const fetchSubs = useCallback(async () => {
@@ -35,34 +48,39 @@ export default function App() {
     if (error) {
       showToast('데이터 불러오기 실패');
       console.error(error);
-    } else {
-      setSubs(data || []);
+      setLoading(false);
+      return;
     }
+    const rows = data || [];
+    setAllSubs(rows);
+    const uniqueMonths = [...new Set(rows.map((r) => r.month))].sort();
+    setMonths(uniqueMonths);
+    setCurrentMonth((prev) => {
+      if (prev && uniqueMonths.includes(prev)) return prev;
+      return uniqueMonths[uniqueMonths.length - 1] || null;
+    });
     setLoading(false);
   }, [showToast]);
 
   useEffect(() => {
     fetchSubs();
-
     const channel = supabase
       .channel('subscriptions-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'subscriptions' }, () => {
         fetchSubs();
       })
       .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => { supabase.removeChannel(channel); };
   }, [fetchSubs]);
+
+  const subs = currentMonth ? allSubs.filter((s) => s.month === currentMonth) : [];
+  const isLatestMonth = currentMonth === months[months.length - 1];
 
   useEffect(() => {
     if (!chartRef.current) return;
     const activeSubs = subs.filter((s) => s.status === 'active');
     const deptMap = {};
-    activeSubs.forEach((s) => {
-      deptMap[s.dept] = (deptMap[s.dept] || 0) + s.amt;
-    });
+    activeSubs.forEach((s) => { deptMap[s.dept] = (deptMap[s.dept] || 0) + s.amt; });
     const labels = Object.keys(deptMap).sort((a, b) => deptMap[b] - deptMap[a]);
     const data = labels.map((l) => deptMap[l]);
     const colors = labels.map((_, i) => deptColors[i % deptColors.length]);
@@ -76,14 +94,11 @@ export default function App() {
         cutout: '62%',
         plugins: {
           legend: { display: false },
-          tooltip: { callbacks: { label: (ctx) => ' ' + ctx.label + ': ' + Math.round(ctx.raw / 10000) + '만원' } },
+          tooltip: { callbacks: { label: (ctx) => ' ' + ctx.label + ': ' + fmt(ctx.raw) } },
         },
       },
     });
-
-    return () => {
-      if (chartInstance.current) chartInstance.current.destroy();
-    };
+    return () => { if (chartInstance.current) chartInstance.current.destroy(); };
   }, [subs]);
 
   const activeSubs = subs.filter((s) => s.status === 'active');
@@ -93,36 +108,28 @@ export default function App() {
   const deptMap = {};
   activeSubs.forEach((s) => { deptMap[s.dept] = (deptMap[s.dept] || 0) + s.amt; });
   const deptLabels = Object.keys(deptMap).sort((a, b) => deptMap[b] - deptMap[a]);
-  const deptTotal = Object.values(deptMap).reduce((a, b) => a + b, 0);
 
   const filtered = filter === 'all' ? subs : subs.filter((s) => s.status === filter);
   const sorted = [...filtered].sort((a, b) => (sort === 'desc' ? b.amt - a.amt : a.amt - b.amt));
 
   async function updateAmount(id, newAmt) {
     const { error } = await supabase.from('subscriptions').update({ amt: newAmt }).eq('id', id);
-    if (error) {
-      showToast('저장 실패');
-    } else {
-      setSubs((prev) => prev.map((s) => (s.id === id ? { ...s, amt: newAmt } : s)));
-    }
+    if (error) { showToast('저장 실패'); }
+    else { setAllSubs((prev) => prev.map((s) => (s.id === id ? { ...s, amt: newAmt } : s))); }
   }
 
   async function updateNote(id, newNote) {
     const { error } = await supabase.from('subscriptions').update({ note: newNote }).eq('id', id);
-    if (error) {
-      showToast('저장 실패');
-    } else {
-      setSubs((prev) => prev.map((s) => (s.id === id ? { ...s, note: newNote } : s)));
-    }
+    if (error) { showToast('저장 실패'); }
+    else { setAllSubs((prev) => prev.map((s) => (s.id === id ? { ...s, note: newNote } : s))); }
   }
 
   async function toggleStatus(s) {
     const newStatus = s.status === 'active' ? 'cancel' : 'active';
     const { error } = await supabase.from('subscriptions').update({ status: newStatus }).eq('id', s.id);
-    if (error) {
-      showToast('변경 실패');
-    } else {
-      setSubs((prev) => prev.map((x) => (x.id === s.id ? { ...x, status: newStatus } : x)));
+    if (error) { showToast('변경 실패'); }
+    else {
+      setAllSubs((prev) => prev.map((x) => (x.id === s.id ? { ...x, status: newStatus } : x)));
       showToast(newStatus === 'active' ? `${s.name} 활성으로 변경됨` : `${s.name} 해지로 변경됨`);
     }
   }
@@ -136,26 +143,17 @@ export default function App() {
   function openEditModal(s) {
     setEditingId(s.id);
     setForm({
-      name: s.name,
-      sub: s.sub || '',
-      amt: String(s.amt),
-      dept: s.dept,
-      members: (s.members || []).join(', '),
-      status: s.status,
+      name: s.name, sub: s.sub || '', amt: String(s.amt), dept: s.dept,
+      members: (s.members || []).join(', '), status: s.status,
     });
     setModalOpen(true);
   }
 
-  function closeModal() {
-    setModalOpen(false);
-  }
+  function closeModal() { setModalOpen(false); }
 
   async function saveModal() {
     const name = form.name.trim();
-    if (!name) {
-      showToast('서비스명을 입력해주세요');
-      return;
-    }
+    if (!name) { showToast('서비스명을 입력해주세요'); return; }
     const amt = parseInt(String(form.amt).replace(/[^0-9]/g, '')) || 0;
     const dept = form.dept.trim() || '미지정';
     const members = form.members.trim() ? form.members.split(',').map((m) => m.trim()).filter(Boolean) : [];
@@ -163,18 +161,16 @@ export default function App() {
 
     if (editingId) {
       const { error } = await supabase.from('subscriptions').update(payload).eq('id', editingId);
-      if (error) {
-        showToast('수정 실패');
-      } else {
-        setSubs((prev) => prev.map((s) => (s.id === editingId ? { ...s, ...payload } : s)));
+      if (error) { showToast('수정 실패'); }
+      else {
+        setAllSubs((prev) => prev.map((s) => (s.id === editingId ? { ...s, ...payload } : s)));
         showToast(`${name} 수정 완료`);
       }
     } else {
-      const { data, error } = await supabase.from('subscriptions').insert(payload).select();
-      if (error) {
-        showToast('추가 실패');
-      } else if (data) {
-        setSubs((prev) => [...prev, ...data]);
+      const { data, error } = await supabase.from('subscriptions').insert({ ...payload, month: currentMonth }).select();
+      if (error) { showToast('추가 실패'); }
+      else if (data) {
+        setAllSubs((prev) => [...prev, ...data]);
         showToast(`${name} 구독이 추가되었습니다`);
       }
     }
@@ -183,17 +179,40 @@ export default function App() {
 
   async function deleteSub() {
     if (!editingId) return;
-    const s = subs.find((x) => x.id === editingId);
+    const s = allSubs.find((x) => x.id === editingId);
     if (!s) return;
     if (!window.confirm(`'${s.name}' 구독을 삭제할까요? 이 작업은 되돌릴 수 없습니다.`)) return;
     const { error } = await supabase.from('subscriptions').delete().eq('id', editingId);
-    if (error) {
-      showToast('삭제 실패');
-    } else {
-      setSubs((prev) => prev.filter((x) => x.id !== editingId));
+    if (error) { showToast('삭제 실패'); }
+    else {
+      setAllSubs((prev) => prev.filter((x) => x.id !== editingId));
       showToast(`${s.name} 삭제됨`);
     }
     setModalOpen(false);
+  }
+
+  async function saveSnapshot() {
+    if (!currentMonth) return;
+    const newMonth = nextMonth(currentMonth);
+    if (months.includes(newMonth)) {
+      showToast(`${monthLabel(newMonth)}은 이미 존재해요`);
+      return;
+    }
+    if (!window.confirm(`${monthLabel(currentMonth)} 현황을 그대로 복사해서 ${monthLabel(newMonth)}을 새로 만들까요?`)) return;
+
+    const currentRows = allSubs.filter((s) => s.month === currentMonth);
+    const newRows = currentRows.map(({ id, created_at, updated_at, ...rest }) => ({ ...rest, month: newMonth }));
+
+    const { data, error } = await supabase.from('subscriptions').insert(newRows).select();
+    if (error) {
+      showToast('스냅샷 저장 실패');
+      console.error(error);
+    } else {
+      setAllSubs((prev) => [...prev, ...(data || [])]);
+      setMonths((prev) => [...prev, newMonth].sort());
+      setCurrentMonth(newMonth);
+      showToast(`${monthLabel(newMonth)} 스냅샷이 저장되었습니다`);
+    }
   }
 
   return (
@@ -210,8 +229,26 @@ export default function App() {
       </header>
 
       <main>
-        <div className="page-title">법인카드 구독 현황</div>
-        <div className="page-sub">카드번호 4201-****-****-9645 · 모든 변경사항은 자동으로 저장되고 실시간으로 공유됩니다</div>
+        <div className="page-title-row">
+          <div>
+            <div className="page-title">법인카드 구독 현황</div>
+            <div className="page-sub">카드번호 4201-****-****-9645 · 모든 변경사항은 자동으로 저장되고 실시간으로 공유됩니다</div>
+          </div>
+          <div className="month-controls">
+            {months.length > 0 && (
+              <select className="month-select" value={currentMonth || ''} onChange={(e) => setCurrentMonth(e.target.value)}>
+                {months.map((m) => (
+                  <option key={m} value={m}>{monthLabel(m)}</option>
+                ))}
+              </select>
+            )}
+            {isLatestMonth && currentMonth && (
+              <button className="btn btn-snapshot" onClick={saveSnapshot}>
+                {monthLabel(nextMonth(currentMonth))} 스냅샷 저장
+              </button>
+            )}
+          </div>
+        </div>
 
         <div className="top-row">
           <div className="metrics">
@@ -231,18 +268,15 @@ export default function App() {
             <div className="dept-chart-wrap">
               <canvas ref={chartRef} width="108" height="108"></canvas>
               <div className="dept-legend">
-                {deptLabels.map((l, i) => {
-                  const pct = deptTotal > 0 ? Math.round((deptMap[l] / deptTotal) * 100) : 0;
-                  return (
-                    <div className="dept-legend-item" key={l}>
-                      <div className="dept-legend-left">
-                        <div className="dept-dot" style={{ background: deptColors[i % deptColors.length] }}></div>
-                        <span>{l}</span>
-                      </div>
-                      <span className="dept-legend-pct">{pct}%</span>
+                {deptLabels.map((l, i) => (
+                  <div className="dept-legend-item" key={l}>
+                    <div className="dept-legend-left">
+                      <div className="dept-dot" style={{ background: deptColors[i % deptColors.length] }}></div>
+                      <span>{l}</span>
                     </div>
-                  );
-                })}
+                    <span className="dept-legend-amt">{fmt(deptMap[l])}</span>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
@@ -279,6 +313,8 @@ export default function App() {
             <tbody>
               {loading ? (
                 <tr><td colSpan="9"><div className="loading-state">불러오는 중...</div></td></tr>
+              ) : sorted.length === 0 ? (
+                <tr><td colSpan="9"><div className="loading-state">표시할 구독이 없어요</div></td></tr>
               ) : (
                 sorted.map((s, i) => (
                   <Row
