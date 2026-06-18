@@ -215,6 +215,28 @@ export default function App() {
     }
   }
 
+  async function deleteMonth() {
+    if (!currentMonth) return;
+    if (months.length <= 1) {
+      showToast('마지막 남은 달은 삭제할 수 없어요');
+      return;
+    }
+    if (!window.confirm(`${monthLabel(currentMonth)} 데이터를 전부 삭제할까요? 이 작업은 되돌릴 수 없습니다.`)) return;
+
+    const { error } = await supabase.from('subscriptions').delete().eq('month', currentMonth);
+    if (error) {
+      showToast('삭제 실패');
+      console.error(error);
+    } else {
+      const deletedMonth = currentMonth;
+      const remaining = months.filter((m) => m !== deletedMonth);
+      setAllSubs((prev) => prev.filter((s) => s.month !== deletedMonth));
+      setMonths(remaining);
+      setCurrentMonth(remaining[remaining.length - 1] || null);
+      showToast(`${monthLabel(deletedMonth)} 데이터가 삭제되었습니다`);
+    }
+  }
+
   return (
     <>
       <header>
@@ -247,6 +269,11 @@ export default function App() {
                 {monthLabel(nextMonth(currentMonth))} 스냅샷 저장
               </button>
             )}
+            {currentMonth && months.length > 1 && (
+              <button className="btn btn-delete-month" onClick={deleteMonth} title="이 달 데이터 삭제">
+                이 달 삭제
+              </button>
+            )}
           </div>
         </div>
 
@@ -268,15 +295,21 @@ export default function App() {
             <div className="dept-chart-wrap">
               <canvas ref={chartRef} width="108" height="108"></canvas>
               <div className="dept-legend">
-                {deptLabels.map((l, i) => (
-                  <div className="dept-legend-item" key={l}>
-                    <div className="dept-legend-left">
-                      <div className="dept-dot" style={{ background: deptColors[i % deptColors.length] }}></div>
-                      <span>{l}</span>
+                {deptLabels.map((l, i) => {
+                  const pct = total > 0 ? Math.round((deptMap[l] / total) * 100) : 0;
+                  return (
+                    <div className="dept-legend-item" key={l}>
+                      <div className="dept-legend-left">
+                        <div className="dept-dot" style={{ background: deptColors[i % deptColors.length] }}></div>
+                        <span>{l}</span>
+                      </div>
+                      <div className="dept-legend-right">
+                        <span className="dept-legend-amt">{fmt(deptMap[l])}</span>
+                        <span className="dept-legend-pct">{pct}%</span>
+                      </div>
                     </div>
-                    <span className="dept-legend-amt">{fmt(deptMap[l])}</span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>
